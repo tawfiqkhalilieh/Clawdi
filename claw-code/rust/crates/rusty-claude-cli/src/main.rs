@@ -1521,7 +1521,7 @@ fn validate_model_syntax(model: &str) -> Result<(), String> {
         } else if trimmed.starts_with("gemini-") {
             err_msg.push_str("\nDid you mean `google/");
             err_msg.push_str(trimmed);
-            err_msg.push_str("`? (Requires GEMINI_API_KEY env var or ~/.gemini auth)");
+            err_msg.push_str("`? (Requires GEMINI_API_KEY env var or local .gemini auth)");
         }
         return Err(err_msg);
     }

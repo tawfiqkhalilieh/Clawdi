@@ -339,9 +339,18 @@ pub fn parse_oauth_callback_query(query: &str) -> Result<OAuthCallbackParams, St
     })
 }
 
+#[cfg(not(windows))]
 fn generate_random_token(bytes: usize) -> io::Result<String> {
     let mut buffer = vec![0_u8; bytes];
     File::open("/dev/urandom")?.read_exact(&mut buffer)?;
+    Ok(base64url_encode(&buffer))
+}
+
+#[cfg(windows)]
+fn generate_random_token(bytes: usize) -> io::Result<String> {
+    let mut buffer = vec![0_u8; bytes];
+    getrandom::getrandom(&mut buffer)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
     Ok(base64url_encode(&buffer))
 }
 
@@ -389,7 +398,7 @@ fn gemini_home_dir() -> io::Result<PathBuf> {
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
-                "HOME is not set",
+                "HOME is not set (on Windows, set USERPROFILE or HOME)",
             )
         })?;
     Ok(PathBuf::from(home).join(".gemini"))

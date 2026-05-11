@@ -395,8 +395,13 @@ fn credentials_home_dir() -> io::Result<PathBuf> {
 fn gemini_home_dir() -> io::Result<PathBuf> {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))?;
-    Ok(PathBuf::from(home).join(".gemini"))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "HOME is not set (on Windows, set USERPROFILE or HOME)",
+            )
+        })?;
+  Ok(PathBuf::from(home).join(".gemini"))
 }
 
 fn read_credentials_root(path: &PathBuf) -> io::Result<Map<String, Value>> {

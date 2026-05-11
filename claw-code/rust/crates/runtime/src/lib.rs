@@ -49,7 +49,7 @@ mod trust_resolver;
 mod usage;
 pub mod worker_boot;
 
-pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
+pub use bash::{execute_bash, execute_bash_with_streaming, BashCommandInput, BashCommandOutput};
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
 pub use branch_lock::{detect_branch_lock_collisions, BranchLockCollision, BranchLockIntent};
 pub use compact::{

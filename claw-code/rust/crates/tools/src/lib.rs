@@ -12,14 +12,10 @@ use api::{
 use plugins::PluginTool;
 use reqwest::blocking::Client;
 use runtime::{
-    check_freshness, dedupe_superseded_commit_events, edit_file, execute_bash, glob_search,
-    grep_search, load_system_prompt,
-    lsp_client::LspRegistry,
-    mcp_tool_bridge::McpToolRegistry,
-    permission_enforcer::{EnforcementResult, PermissionEnforcer},
-    read_file,
-    summary_compression::compress_summary_text,
-    task_registry::TaskRegistry,
+    check_freshness, dedupe_superseded_commit_events, edit_file, execute_bash_with_streaming,
+    glob_search, grep_search, load_system_prompt, lsp_client::LspRegistry,
+    mcp_tool_bridge::McpToolRegistry, permission_enforcer::{EnforcementResult, PermissionEnforcer},
+    read_file, summary_compression::compress_summary_text, task_registry::TaskRegistry,
     team_cron_registry::{CronRegistry, TeamRegistry},
     worker_boot::{WorkerReadySnapshot, WorkerRegistry, WorkerTaskReceipt},
     write_file, ApiClient, ApiRequest, AssistantEvent, BashCommandInput, BashCommandOutput,
@@ -344,9 +340,14 @@ impl GlobalToolRegistry {
         self.enforcer = Some(enforcer);
     }
 
-    pub fn execute(&self, name: &str, input: &Value) -> Result<String, String> {
+    pub fn execute(
+        &self,
+        name: &str,
+        input: &Value,
+        on_chunk: &mut dyn FnMut(String),
+    ) -> Result<String, String> {
         if mvp_tool_specs().iter().any(|spec| spec.name == name) {
-            return execute_tool_with_enforcer(self.enforcer.as_ref(), name, input);
+            return execute_tool_with_enforcer_and_streaming(self.enforcer.as_ref(), name, input, on_chunk);
         }
         self.plugin_tools
             .iter()
@@ -1195,13 +1196,22 @@ pub fn enforce_permission_check(
 }
 
 pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
-    execute_tool_with_enforcer(None, name, input)
+    execute_tool_with_enforcer_and_streaming(None, name, input, &mut |_| {})
 }
 
-fn execute_tool_with_enforcer(
+pub fn execute_tool_with_streaming(
+    name: &str,
+    input: &Value,
+    on_chunk: &mut dyn FnMut(String),
+) -> Result<String, String> {
+    execute_tool_with_enforcer_and_streaming(None, name, input, on_chunk)
+}
+
+fn execute_tool_with_enforcer_and_streaming(
     enforcer: Option<&PermissionEnforcer>,
     name: &str,
     input: &Value,
+    on_chunk: &mut dyn FnMut(String),
 ) -> Result<String, String> {
     match name {
         "bash" => {
@@ -1209,7 +1219,7 @@ fn execute_tool_with_enforcer(
             let bash_input: BashCommandInput = from_value(input)?;
             let classified_mode = classify_bash_permission(&bash_input.command);
             maybe_enforce_permission_check_with_mode(enforcer, name, input, classified_mode)?;
-            run_bash(bash_input)
+            run_bash_with_streaming(bash_input, on_chunk)
         }
         "read_file" => {
             maybe_enforce_permission_check(enforcer, name, input)?;
@@ -1913,12 +1923,17 @@ fn has_dangerous_paths(command: &str) -> bool {
     false
 }
 
-fn run_bash(input: BashCommandInput) -> Result<String, String> {
+fn run_bash_with_streaming(
+    input: BashCommandInput,
+    on_chunk: &mut dyn FnMut(String),
+) -> Result<String, String> {
     if let Some(output) = workspace_test_branch_preflight(&input.command) {
         return serde_json::to_string_pretty(&output).map_err(|error| error.to_string());
     }
-    serde_json::to_string_pretty(&execute_bash(input).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())
+    serde_json::to_string_pretty(
+        &execute_bash_with_streaming(input, on_chunk).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn workspace_test_branch_preflight(command: &str) -> Option<BashCommandOutput> {
@@ -4759,15 +4774,20 @@ impl SubagentToolExecutor {
 }
 
 impl ToolExecutor for SubagentToolExecutor {
-    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
+    fn execute(
+        &mut self,
+        tool_name: &str,
+        input: &str,
+        on_chunk: &mut dyn FnMut(String),
+    ) -> Result<String, ToolError> {
         if !self.allowed_tools.contains(tool_name) {
             return Err(ToolError::new(format!(
                 "tool `{tool_name}` is not enabled for this sub-agent"
             )));
         }
-        let value = serde_json::from_str(input)
+        let value: Value = serde_json::from_str(input)
             .map_err(|error| ToolError::new(format!("invalid tool input JSON: {error}")))?;
-        execute_tool_with_enforcer(self.enforcer.as_ref(), tool_name, &value)
+        execute_tool_with_enforcer_and_streaming(self.enforcer.as_ref(), tool_name, &value, on_chunk)
             .map_err(ToolError::new)
     }
 }
@@ -6913,6 +6933,7 @@ mod tests {
                     "path": "blocked.txt",
                     "content": "blocked"
                 }),
+                &mut |_| {},
             )
             .expect_err("write tool should be denied before dispatch");
 
@@ -6936,6 +6957,7 @@ mod tests {
                     "content": "blocked"
                 })
                 .to_string(),
+                &mut |_| {},
             )
             .expect_err("subagent write tool should be denied before dispatch");
 
@@ -8825,10 +8847,13 @@ mod tests {
             .expect("bash failure should still return structured output");
         let failure_output: serde_json::Value = serde_json::from_str(&failure).expect("json");
         assert_eq!(failure_output["returnCodeInterpretation"], "exit_code:7");
-        assert!(failure_output["stderr"]
-            .as_str()
-            .expect("stderr")
-            .contains("oops"));
+        // With PTY migration, stdout and stderr may be merged into stdout.
+        let merged_output = format!(
+            "{}{}",
+            failure_output["stdout"].as_str().unwrap_or(""),
+            failure_output["stderr"].as_str().unwrap_or("")
+        );
+        assert!(merged_output.contains("oops"));
 
         let timeout = execute_tool("bash", &json!({ "command": "sleep 1", "timeout": 10 }))
             .expect("bash timeout should return output");
@@ -9535,7 +9560,7 @@ printf 'pwsh:%s' "$1"
         let registry = read_only_registry();
         // Use a command that requires DangerFullAccess (rm) to ensure it's blocked in read-only mode
         let err = registry
-            .execute("bash", &json!({ "command": "rm -rf /" }))
+            .execute("bash", &json!({ "command": "rm -rf /" }), &mut |_| {})
             .expect_err("bash should be denied in read-only mode");
         assert!(
             err.contains("current mode is 'read-only'"),
@@ -9550,6 +9575,7 @@ printf 'pwsh:%s' "$1"
             .execute(
                 "write_file",
                 &json!({ "path": "/tmp/x.txt", "content": "x" }),
+                &mut |_| {},
             )
             .expect_err("write_file should be denied in read-only mode");
         assert!(
@@ -9565,6 +9591,7 @@ printf 'pwsh:%s' "$1"
             .execute(
                 "edit_file",
                 &json!({ "path": "/tmp/x.txt", "old_string": "a", "new_string": "b" }),
+                &mut |_| {},
             )
             .expect_err("edit_file should be denied in read-only mode");
         assert!(
@@ -9584,7 +9611,7 @@ printf 'pwsh:%s' "$1"
         fs::write(&file, "content\n").expect("write test file");
 
         let registry = read_only_registry();
-        let result = registry.execute("read_file", &json!({ "path": file.display().to_string() }));
+        let result = registry.execute("read_file", &json!({ "path": file.display().to_string() }), &mut |_| {});
         assert!(result.is_ok(), "read_file should be allowed: {result:?}");
 
         let _ = fs::remove_dir_all(root);
@@ -9593,7 +9620,7 @@ printf 'pwsh:%s' "$1"
     #[test]
     fn given_read_only_enforcer_when_glob_search_then_not_permission_denied() {
         let registry = read_only_registry();
-        let result = registry.execute("glob_search", &json!({ "pattern": "*.rs" }));
+        let result = registry.execute("glob_search", &json!({ "pattern": "*.rs" }), &mut |_| {});
         assert!(
             result.is_ok(),
             "glob_search should be allowed in read-only mode: {result:?}"
@@ -9607,7 +9634,7 @@ printf 'pwsh:%s' "$1"
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let registry = super::GlobalToolRegistry::builtin();
         let result = registry
-            .execute("bash", &json!({ "command": "printf 'ok'" }))
+            .execute("bash", &json!({ "command": "printf 'ok'" }), &mut |_| {})
             .expect("bash should succeed without enforcer");
         let output: serde_json::Value = serde_json::from_str(&result).expect("json");
         assert_eq!(output["stdout"], "ok");

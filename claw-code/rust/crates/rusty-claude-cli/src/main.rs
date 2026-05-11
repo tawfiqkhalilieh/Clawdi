@@ -7768,6 +7768,11 @@ fn build_runtime_with_plugin_state(
     );
     if emit_output {
         runtime = runtime.with_hook_progress_reporter(Box::new(CliHookProgressReporter));
+        runtime = runtime.with_tool_output_callback(Box::new(|chunk| {
+            use std::io::Write;
+            print!("{chunk}");
+            let _ = std::io::stdout().flush();
+        }));
     }
     Ok(BuiltRuntime::new(runtime, plugin_registry, mcp_state))
 }
@@ -9173,7 +9178,12 @@ impl CliToolExecutor {
 }
 
 impl ToolExecutor for CliToolExecutor {
-    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
+    fn execute(
+        &mut self,
+        tool_name: &str,
+        input: &str,
+        on_chunk: &mut dyn FnMut(String),
+    ) -> Result<String, ToolError> {
         if self
             .allowed_tools
             .as_ref()
@@ -9191,7 +9201,7 @@ impl ToolExecutor for CliToolExecutor {
             self.execute_runtime_tool(tool_name, value)
         } else {
             self.tool_registry
-                .execute(tool_name, &value)
+                .execute(tool_name, &value, on_chunk)
                 .map_err(ToolError::new)
         };
         match result {

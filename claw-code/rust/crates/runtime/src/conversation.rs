@@ -60,7 +60,12 @@ pub trait ApiClient {
 
 /// Trait implemented by tool dispatchers that execute model-requested tools.
 pub trait ToolExecutor {
-    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError>;
+    fn execute(
+        &mut self,
+        tool_name: &str,
+        input: &str,
+        on_chunk: &mut dyn FnMut(String),
+    ) -> Result<String, ToolError>;
 }
 
 /// Error returned when a tool invocation fails locally.
@@ -140,6 +145,7 @@ pub struct ConversationRuntime<C, T> {
     hook_abort_signal: HookAbortSignal,
     hook_progress_reporter: Option<Box<dyn HookProgressReporter>>,
     session_tracer: Option<SessionTracer>,
+    tool_output_callback: Option<Box<dyn FnMut(String) + Send>>,
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -189,6 +195,7 @@ where
             hook_abort_signal: HookAbortSignal::default(),
             hook_progress_reporter: None,
             session_tracer: None,
+            tool_output_callback: None,
         }
     }
 
@@ -222,6 +229,15 @@ where
     #[must_use]
     pub fn with_session_tracer(mut self, session_tracer: SessionTracer) -> Self {
         self.session_tracer = Some(session_tracer);
+        self
+    }
+
+    #[must_use]
+    pub fn with_tool_output_callback(
+        mut self,
+        callback: Box<dyn FnMut(String) + Send>,
+    ) -> Self {
+        self.tool_output_callback = Some(callback);
         self
     }
 
@@ -308,7 +324,7 @@ where
         // Verify tool executor is responsive with a non-destructive probe
         // Using glob_search with a pattern that won't match anything
         let probe_input = r#"{"pattern": "*.health-check-probe-"}"#;
-        match self.tool_executor.execute("glob_search", probe_input) {
+        match self.tool_executor.execute("glob_search", probe_input, &mut |_| {}) {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("Tool executor probe failed: {e}")),
         }
@@ -451,11 +467,18 @@ where
                 let result_message = match permission_outcome {
                     PermissionOutcome::Allow => {
                         self.record_tool_started(iterations, &tool_name);
-                        let (mut output, mut is_error) =
-                            match self.tool_executor.execute(&tool_name, &effective_input) {
-                                Ok(output) => (output, false),
-                                Err(error) => (error.to_string(), true),
-                            };
+                        let (mut output, mut is_error) = match self.tool_executor.execute(
+                            &tool_name,
+                            &effective_input,
+                            &mut |chunk| {
+                                if let Some(callback) = self.tool_output_callback.as_mut() {
+                                    callback(chunk);
+                                }
+                            },
+                        ) {
+                            Ok(output) => (output, false),
+                            Err(error) => (error.to_string(), true),
+                        };
                         output = merge_hook_feedback(pre_hook_result.messages(), output, false);
 
                         let post_hook_result = if is_error {
@@ -826,7 +849,12 @@ impl StaticToolExecutor {
 }
 
 impl ToolExecutor for StaticToolExecutor {
-    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
+    fn execute(
+        &mut self,
+        tool_name: &str,
+        input: &str,
+        _on_chunk: &mut dyn FnMut(String),
+    ) -> Result<String, ToolError> {
         self.handlers
             .get_mut(tool_name)
             .ok_or_else(|| ToolError::new(format!("unknown tool: {tool_name}")))?(input)
@@ -1785,7 +1813,7 @@ mod tests {
 
         // when
         let error = executor
-            .execute("missing", "{}")
+            .execute("missing", "{}", &mut |_| {})
             .expect_err("unregistered tools should fail");
 
         // then

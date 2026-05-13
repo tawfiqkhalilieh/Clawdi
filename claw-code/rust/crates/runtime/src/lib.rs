@@ -49,7 +49,7 @@ mod trust_resolver;
 mod usage;
 pub mod worker_boot;
 
-pub use bash::{execute_bash, execute_bash_with_streaming, BashCommandInput, BashCommandOutput};
+pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
 pub use branch_lock::{detect_branch_lock_collisions, BranchLockCollision, BranchLockIntent};
 pub use compact::{
@@ -112,11 +112,11 @@ pub use mcp_stdio::{
     UnsupportedMcpServer,
 };
 pub use oauth::{
-    clear_oauth_credentials, code_challenge_s256, credentials_path, gemini_credentials_path,
-    generate_pkce_pair, generate_state, load_gemini_oauth_credentials, load_oauth_credentials,
-    loopback_redirect_uri, parse_oauth_callback_query, parse_oauth_callback_request_target,
-    save_oauth_credentials, OAuthAuthorizationRequest, OAuthCallbackParams, OAuthRefreshRequest,
-    OAuthTokenExchangeRequest, OAuthTokenSet, PkceChallengeMethod, PkceCodePair,
+    clear_oauth_credentials, code_challenge_s256, credentials_path, generate_pkce_pair,
+    generate_state, load_oauth_credentials, loopback_redirect_uri, parse_oauth_callback_query,
+    parse_oauth_callback_request_target, save_oauth_credentials, OAuthAuthorizationRequest,
+    OAuthCallbackParams, OAuthRefreshRequest, OAuthTokenExchangeRequest, OAuthTokenSet,
+    PkceChallengeMethod, PkceCodePair,
 };
 pub use permissions::{
     PermissionContext, PermissionMode, PermissionOutcome, PermissionOverride, PermissionPolicy,

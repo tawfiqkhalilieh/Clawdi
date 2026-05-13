@@ -57,7 +57,7 @@ use tools::{
     execute_tool, mvp_tool_specs, GlobalToolRegistry, RuntimeToolDefinition, ToolSearchOutput,
 };
 
-const DEFAULT_MODEL: &str = "gemini-3-flash";
+const DEFAULT_MODEL: &str = "claude-opus-4-6";
 
 /// #148: Model provenance for `claw status` JSON/text output. Records where
 /// the resolved model string came from so claws don't have to re-read argv
@@ -1449,18 +1449,12 @@ fn levenshtein_distance(left: &str, right: &str) -> usize {
     previous[right_chars.len()]
 }
 
-fn resolve_model_alias(model: &str) -> String {
-    let trimmed = model.trim();
-    let lower = trimmed.to_ascii_lowercase();
-    match lower.as_str() {
-        "opus" => "claude-opus-4-6".to_string(),
-        "sonnet" => "claude-sonnet-4-6".to_string(),
-        "haiku" => "claude-haiku-4-5-20251213".to_string(),
-        "gemini-pro" => "gemini-2.5-pro".to_string(),
-        "gemini-flash" => "gemini-2.5-flash".to_string(),
-        "gemini-3-pro" => "gemini-3-pro-preview".to_string(),
-        "gemini-3-flash" => "gemini-3-flash-preview".to_string(),
-        _ => trimmed.to_string(),
+fn resolve_model_alias(model: &str) -> &str {
+    match model {
+        "opus" => "claude-opus-4-6",
+        "sonnet" => "claude-sonnet-4-6",
+        "haiku" => "claude-haiku-4-5-20251213",
+        _ => model,
     }
 }
 
@@ -1470,9 +1464,9 @@ fn resolve_model_alias(model: &str) -> String {
 fn resolve_model_alias_with_config(model: &str) -> String {
     let trimmed = model.trim();
     if let Some(resolved) = config_alias_for_current_dir(trimmed) {
-        return resolve_model_alias(&resolved);
+        return resolve_model_alias(&resolved).to_string();
     }
-    resolve_model_alias(trimmed)
+    resolve_model_alias(trimmed).to_string()
 }
 
 /// Validate model syntax at parse time.
@@ -1485,10 +1479,7 @@ fn validate_model_syntax(model: &str) -> Result<(), String> {
     }
     // Known aliases are always valid
     match trimmed {
-        "opus" | "sonnet" | "haiku" | "gemini-flash" | "gemini-pro" | "gemini-3-flash"
-        | "gemini-3-pro" | "gemini-2.0-flash" | "gemini-2.5-flash" | "gemini-2.5-pro" => {
-            return Ok(())
-        }
+        "opus" | "sonnet" | "haiku" => return Ok(()),
         _ => {}
     }
     // Check for spaces (malformed)
@@ -1518,10 +1509,6 @@ fn validate_model_syntax(model: &str) -> Result<(), String> {
             err_msg.push_str("\nDid you mean `xai/");
             err_msg.push_str(trimmed);
             err_msg.push_str("`? (Requires XAI_API_KEY env var)");
-        } else if trimmed.starts_with("gemini-") {
-            err_msg.push_str("\nDid you mean `google/");
-            err_msg.push_str(trimmed);
-            err_msg.push_str("`? (Requires GEMINI_API_KEY env var or local .gemini auth)");
         }
         return Err(err_msg);
     }
@@ -1620,7 +1607,6 @@ fn resolve_repl_model(cli_model: String) -> String {
         return cli_model;
     }
     if let Some(env_model) = env::var("ANTHROPIC_MODEL")
-        .or_else(|_| env::var("GEMINI_MODEL"))
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -1638,7 +1624,6 @@ fn provider_label(kind: ProviderKind) -> &'static str {
         ProviderKind::Anthropic => "anthropic",
         ProviderKind::Xai => "xai",
         ProviderKind::OpenAi => "openai",
-        ProviderKind::Gemini => "gemini",
     }
 }
 
@@ -4472,14 +4457,14 @@ impl LiveCli {
             |_| self.session.path.display().to_string(),
             |path| path.display().to_string(),
         );
-
-        format!("\x1b[38;5;69m\
- ██████╗██╗      █████╗ ██╗    ██╗██████╗ ██╗\n\
-\x1b[38;5;68m██╔════╝██║     ██╔══██╗██║    ██║██╔══██╗██║\n\
-\x1b[38;5;63m██║     ██║     ███████║██║ █╗ ██║██║  ██║██║\n\
-\x1b[38;5;99m██║     ██║     ██╔══██║██║███╗██║██║  ██║██║\n\
-\x1b[38;5;135m╚██████╗███████╗██║  ██║╚███╔███╔╝██████╔╝██║\n\
-\x1b[38;5;141m ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝╚═════╝ ╚═╝\x1b[0m \x1b[38;5;63m✦\x1b[0m\n\n\
+        format!(
+            "\x1b[38;5;196m\
+ ██████╗██╗      █████╗ ██╗    ██╗\n\
+██╔════╝██║     ██╔══██╗██║    ██║\n\
+██║     ██║     ███████║██║ █╗ ██║\n\
+██║     ██║     ██╔══██║██║███╗██║\n\
+╚██████╗███████╗██║  ██║╚███╔███╔╝\n\
+ ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝\x1b[0m \x1b[38;5;208mCode\x1b[0m 🦞\n\n\
   \x1b[2mModel\x1b[0m            {}\n\
   \x1b[2mPermissions\x1b[0m      {}\n\
   \x1b[2mBranch\x1b[0m           {}\n\
@@ -7768,11 +7753,6 @@ fn build_runtime_with_plugin_state(
     );
     if emit_output {
         runtime = runtime.with_hook_progress_reporter(Box::new(CliHookProgressReporter));
-        runtime = runtime.with_tool_output_callback(Box::new(|chunk| {
-            use std::io::Write;
-            print!("{chunk}");
-            let _ = std::io::stdout().flush();
-        }));
     }
     Ok(BuiltRuntime::new(runtime, plugin_registry, mcp_state))
 }
@@ -7916,13 +7896,17 @@ impl AnthropicRuntimeClient {
                     .with_prompt_cache(PromptCache::new(session_id));
                 ApiProviderClient::Anthropic(inner)
             }
-            ProviderKind::Xai | ProviderKind::OpenAi | ProviderKind::Gemini => {
+            ProviderKind::Xai | ProviderKind::OpenAi => {
                 // The api crate's `ProviderClient::from_model_with_anthropic_auth`
                 // with `None` for the anthropic auth routes via
                 // `detect_provider_kind` and builds an
                 // `OpenAiCompatClient::from_env` with the matching
-                // `OpenAiCompatConfig` (openai / xai / dashscope) or
-                // `GeminiClient::from_env` for Gemini.
+                // `OpenAiCompatConfig` (openai / xai / dashscope).
+                // That reads the correct API-key env var and BASE_URL
+                // override internally, so this one call covers OpenAI,
+                // OpenRouter, xAI, DashScope, Ollama, and any other
+                // OpenAI-compat endpoint users configure via
+                // `OPENAI_BASE_URL` / `XAI_BASE_URL` / `DASHSCOPE_BASE_URL`.
                 ApiProviderClient::from_model_with_anthropic_auth(&resolved_model, None)?
             }
         };
@@ -9178,12 +9162,7 @@ impl CliToolExecutor {
 }
 
 impl ToolExecutor for CliToolExecutor {
-    fn execute(
-        &mut self,
-        tool_name: &str,
-        input: &str,
-        on_chunk: &mut dyn FnMut(String),
-    ) -> Result<String, ToolError> {
+    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
         if self
             .allowed_tools
             .as_ref()
@@ -9201,7 +9180,7 @@ impl ToolExecutor for CliToolExecutor {
             self.execute_runtime_tool(tool_name, value)
         } else {
             self.tool_registry
-                .execute(tool_name, &value, on_chunk)
+                .execute(tool_name, &value)
                 .map_err(ToolError::new)
         };
         match result {
@@ -13465,7 +13444,7 @@ UU conflicted.rs",
         );
 
         let tool_output = executor
-            .execute("mcp__alpha__echo", r#"{"text":"hello"}"#, &mut |_| {})
+            .execute("mcp__alpha__echo", r#"{"text":"hello"}"#)
             .expect("discovered mcp tool should execute");
         let tool_json: serde_json::Value =
             serde_json::from_str(&tool_output).expect("tool output should be json");
@@ -13475,7 +13454,6 @@ UU conflicted.rs",
             .execute(
                 "MCPTool",
                 r#"{"qualifiedName":"mcp__alpha__echo","arguments":{"text":"wrapped"}}"#,
-                &mut |_| {},
             )
             .expect("generic mcp wrapper should execute");
         let wrapped_json: serde_json::Value =
@@ -13483,11 +13461,7 @@ UU conflicted.rs",
         assert_eq!(wrapped_json["structuredContent"]["echoed"], "wrapped");
 
         let search_output = executor
-            .execute(
-                "ToolSearch",
-                r#"{"query":"alpha echo","max_results":5}"#,
-                &mut |_| {},
-            )
+            .execute("ToolSearch", r#"{"query":"alpha echo","max_results":5}"#)
             .expect("tool search should execute");
         let search_json: serde_json::Value =
             serde_json::from_str(&search_output).expect("search output should be json");
@@ -13507,7 +13481,7 @@ UU conflicted.rs",
         );
 
         let listed = executor
-            .execute("ListMcpResourcesTool", r#"{"server":"alpha"}"#, &mut |_| {})
+            .execute("ListMcpResourcesTool", r#"{"server":"alpha"}"#)
             .expect("resources should list");
         let listed_json: serde_json::Value =
             serde_json::from_str(&listed).expect("resource output should be json");
@@ -13517,7 +13491,6 @@ UU conflicted.rs",
             .execute(
                 "ReadMcpResourceTool",
                 r#"{"server":"alpha","uri":"file://guide.txt"}"#,
-                &mut |_| {},
             )
             .expect("resource should read");
         let read_json: serde_json::Value =
@@ -13569,11 +13542,7 @@ UU conflicted.rs",
         );
 
         let search_output = executor
-            .execute(
-                "ToolSearch",
-                r#"{"query":"remote","max_results":5}"#,
-                &mut |_| {},
-            )
+            .execute("ToolSearch", r#"{"query":"remote","max_results":5}"#)
             .expect("tool search should execute");
         let search_json: serde_json::Value =
             serde_json::from_str(&search_output).expect("search output should be json");

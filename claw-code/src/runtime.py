@@ -151,22 +151,9 @@ class PortRuntime:
             persisted_session_path=persisted_session_path,
         )
 
-    def run_turn_loop(
-        self,
-        prompt: str,
-        limit: int = 5,
-        max_turns: int = 3,
-        structured_output: bool = False,
-        live_gemini: bool = False,
-        gemini_model: str = "gemini-3-flash",
-    ) -> list[TurnResult]:
+    def run_turn_loop(self, prompt: str, limit: int = 5, max_turns: int = 3, structured_output: bool = False) -> list[TurnResult]:
         engine = QueryEnginePort.from_workspace()
-        engine.config = QueryEngineConfig(
-            max_turns=max_turns,
-            structured_output=structured_output,
-            use_live_gemini=live_gemini,
-            gemini_model=gemini_model,
-        )
+        engine.config = QueryEngineConfig(max_turns=max_turns, structured_output=structured_output)
         matches = self.route_prompt(prompt, limit=limit)
         command_names = tuple(match.name for match in matches if match.kind == 'command')
         tool_names = tuple(match.name for match in matches if match.kind == 'tool')

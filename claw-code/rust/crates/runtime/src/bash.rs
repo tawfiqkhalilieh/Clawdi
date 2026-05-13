@@ -1,12 +1,12 @@
 use std::env;
-use std::io::{self, Read};
+use std::io;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command as TokioCommand;
 use tokio::runtime::Builder;
+use tokio::time::timeout;
 
 use crate::lane_events::{LaneEvent, ShipMergeMethod, ShipProvenance};
 use crate::sandbox::{
@@ -69,14 +69,6 @@ pub struct BashCommandOutput {
 
 /// Executes a shell command with the requested sandbox settings.
 pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
-    execute_bash_with_streaming(input, &mut |_| {})
-}
-
-/// Executes a shell command with a streaming callback for real-time output.
-pub fn execute_bash_with_streaming(
-    input: BashCommandInput,
-    on_chunk: &mut dyn FnMut(String),
-) -> io::Result<BashCommandOutput> {
     let cwd = env::current_dir()?;
     let sandbox_status = sandbox_status_for_input(&input, &cwd);
 
@@ -108,7 +100,7 @@ pub fn execute_bash_with_streaming(
     }
 
     let runtime = Builder::new_current_thread().enable_all().build()?;
-    runtime.block_on(execute_bash_async(input, sandbox_status, cwd, on_chunk))
+    runtime.block_on(execute_bash_async(input, sandbox_status, cwd))
 }
 
 /// Detect git push to main and emit ship provenance event
@@ -177,70 +169,19 @@ async fn execute_bash_async(
     input: BashCommandInput,
     sandbox_status: SandboxStatus,
     cwd: std::path::PathBuf,
-    on_chunk: &mut dyn FnMut(String),
 ) -> io::Result<BashCommandOutput> {
     // Detect and emit ship provenance for git push operations
     detect_and_emit_ship_prepared(&input.command);
 
-    // Setup PTY
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let mut command = prepare_tokio_command(&input.command, &cwd, &sandbox_status, true);
 
-    let mut cmd = CommandBuilder::new("sh");
-    cmd.args(["-lc", &input.command]);
-    cmd.cwd(cwd);
-
-    if sandbox_status.filesystem_active {
-        let cwd_base = env::current_dir()?; // Original CWD
-        cmd.env("HOME", cwd_base.join(".sandbox-home"));
-        cmd.env("TMPDIR", cwd_base.join(".sandbox-tmp"));
-    }
-
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-    // Drop slave to ensure that EOF is reached when child exits
-    drop(pair.slave);
-
-    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-
-    tokio::task::spawn_blocking(move || {
-        let mut buffer = [0u8; 4096];
-        while let Ok(n) = reader.read(&mut buffer) {
-            if n == 0 {
-                break;
-            }
-            if tx.blocking_send(buffer[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
-
-    let mut stdout_acc = String::new();
-    let start_time = std::time::Instant::now();
-    let timeout_duration = input.timeout.map(Duration::from_millis);
-
-    loop {
-        if let Some(timeout) = timeout_duration {
-            if start_time.elapsed() >= timeout {
-                let _ = child.kill();
-                let stdout = truncate_output(&stdout_acc);
+    let output_result = if let Some(timeout_ms) = input.timeout {
+        match timeout(Duration::from_millis(timeout_ms), command.output()).await {
+            Ok(result) => (result?, false),
+            Err(_) => {
                 return Ok(BashCommandOutput {
-                    stdout,
-                    stderr: format!("Command exceeded timeout of {} ms", timeout.as_millis()),
+                    stdout: String::new(),
+                    stderr: format!("Command exceeded timeout of {timeout_ms} ms"),
                     raw_output_path: None,
                     interrupted: true,
                     is_image: None,
@@ -257,71 +198,27 @@ async fn execute_bash_async(
                 });
             }
         }
-
-        tokio::select! {
-            chunk = rx.recv() => {
-                match chunk {
-                    Some(data) => {
-                        let chunk_str = String::from_utf8_lossy(&data).to_string();
-                        on_chunk(chunk_str.clone());
-                        stdout_acc.push_str(&chunk_str);
-                    }
-                    None => break,
-                }
-            }
-            _ = tokio::time::sleep(Duration::from_millis(10)) => {
-                if let Some(exit_status) = child.try_wait().map_err(|e| io::Error::new(io::ErrorKind::Other, e))? {
-                    // Drain remaining chunks
-                    while let Ok(data) = rx.try_recv() {
-                        let chunk_str = String::from_utf8_lossy(&data).to_string();
-                        on_chunk(chunk_str.clone());
-                        stdout_acc.push_str(&chunk_str);
-                    }
-
-                    let stdout = truncate_output(&stdout_acc);
-                    let no_output_expected = Some(stdout.trim().is_empty());
-                    let return_code_interpretation = match exit_status.exit_code() {
-                        0 => None,
-                        code => Some(format!("exit_code:{code}")),
-                    };
-
-                    return Ok(BashCommandOutput {
-                        stdout,
-                        stderr: String::new(),
-                        raw_output_path: None,
-                        interrupted: false,
-                        is_image: None,
-                        background_task_id: None,
-                        backgrounded_by_user: None,
-                        assistant_auto_backgrounded: None,
-                        dangerously_disable_sandbox: input.dangerously_disable_sandbox,
-                        return_code_interpretation,
-                        no_output_expected,
-                        structured_content: None,
-                        persisted_output_path: None,
-                        persisted_output_size: None,
-                        sandbox_status: Some(sandbox_status),
-                    });
-                }
-            }
-        }
-    }
-
-    let status = child
-        .wait()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    let stdout = truncate_output(&stdout_acc);
-    let no_output_expected = Some(stdout.trim().is_empty());
-    let return_code_interpretation = match status.exit_code() {
-        0 => None,
-        code => Some(format!("exit_code:{code}")),
+    } else {
+        (command.output().await?, false)
     };
+
+    let (output, interrupted) = output_result;
+    let stdout = truncate_output(&String::from_utf8_lossy(&output.stdout));
+    let stderr = truncate_output(&String::from_utf8_lossy(&output.stderr));
+    let no_output_expected = Some(stdout.trim().is_empty() && stderr.trim().is_empty());
+    let return_code_interpretation = output.status.code().and_then(|code| {
+        if code == 0 {
+            None
+        } else {
+            Some(format!("exit_code:{code}"))
+        }
+    });
 
     Ok(BashCommandOutput {
         stdout,
-        stderr: String::new(),
+        stderr,
         raw_output_path: None,
-        interrupted: false,
+        interrupted,
         is_image: None,
         background_task_id: None,
         backgrounded_by_user: None,
@@ -378,7 +275,6 @@ fn prepare_command(
     prepared
 }
 
-#[allow(dead_code)]
 fn prepare_tokio_command(
     command: &str,
     cwd: &std::path::Path,

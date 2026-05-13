@@ -19,8 +19,6 @@ class QueryEngineConfig:
     compact_after_turns: int = 12
     structured_output: bool = False
     structured_retry_limit: int = 2
-    use_live_gemini: bool = False
-    gemini_model: str = "gemini-3-flash"
 
 
 @dataclass(frozen=True)
@@ -85,27 +83,8 @@ class QueryEnginePort:
             f'Matched tools: {", ".join(matched_tools) if matched_tools else "none"}',
             f'Permission denials: {len(denied_tools)}',
         ]
-
-        if self.config.use_live_gemini:
-            from .gemini_client import GeminiClient
-            client = GeminiClient(model=self.config.gemini_model)
-            try:
-                contents = [{'role': 'user', 'parts': [{'text': prompt}]}]
-                res = client.generate_content(contents)
-                parts = res.get('candidates', [{}])[0].get('content', {}).get('parts', [])
-                output = "".join([part.get('text', '') for part in parts])
-                usage_metadata = res.get('usageMetadata', {})
-                projected_usage = UsageSummary(
-                    input_tokens=self.total_usage.input_tokens + usage_metadata.get('promptTokenCount', 0),
-                    output_tokens=self.total_usage.output_tokens + usage_metadata.get('candidatesTokenCount', 0),
-                )
-            except Exception as e:
-                output = f"Error calling Gemini: {e}\n" + self._format_output(summary_lines)
-                projected_usage = self.total_usage.add_turn(prompt, output)
-        else:
-            output = self._format_output(summary_lines)
-            projected_usage = self.total_usage.add_turn(prompt, output)
-
+        output = self._format_output(summary_lines)
+        projected_usage = self.total_usage.add_turn(prompt, output)
         stop_reason = 'completed'
         if projected_usage.input_tokens + projected_usage.output_tokens > self.config.max_budget_tokens:
             stop_reason = 'max_budget_reached'
@@ -138,50 +117,14 @@ class QueryEnginePort:
             yield {'type': 'tool_match', 'tools': matched_tools}
         if denied_tools:
             yield {'type': 'permission_denial', 'denials': [denial.tool_name for denial in denied_tools]}
-
-        if self.config.use_live_gemini:
-            from .gemini_client import GeminiClient
-            client = GeminiClient(model=self.config.gemini_model)
-            full_output = ""
-            usage = {'input_tokens': 0, 'output_tokens': 0}
-            try:
-                contents = [{'role': 'user', 'parts': [{'text': prompt}]}]
-                for chunk in client.stream_generate_content(contents):
-                    parts = chunk.get('candidates', [{}])[0].get('content', {}).get('parts', [])
-                    text = "".join([part.get('text', '') for part in parts])
-                    if text:
-                        full_output += text
-                        yield {'type': 'message_delta', 'text': text}
-                    
-                    if 'usageMetadata' in chunk:
-                        usage['input_tokens'] = chunk['usageMetadata'].get('promptTokenCount', 0)
-                        usage['output_tokens'] = chunk['usageMetadata'].get('candidatesTokenCount', 0)
-                
-                self.total_usage = UsageSummary(
-                    input_tokens=self.total_usage.input_tokens + usage['input_tokens'],
-                    output_tokens=self.total_usage.output_tokens + usage['output_tokens']
-                )
-                self.mutable_messages.append(prompt)
-                self.transcript_store.append(prompt)
-                
-                yield {
-                    'type': 'message_stop',
-                    'usage': usage,
-                    'stop_reason': 'completed',
-                    'transcript_size': len(self.transcript_store.entries),
-                }
-            except Exception as e:
-                yield {'type': 'message_delta', 'text': f"Error calling Gemini: {e}"}
-                yield {'type': 'message_stop', 'usage': usage, 'stop_reason': 'error'}
-        else:
-            result = self.submit_message(prompt, matched_commands, matched_tools, denied_tools)
-            yield {'type': 'message_delta', 'text': result.output}
-            yield {
-                'type': 'message_stop',
-                'usage': {'input_tokens': result.usage.input_tokens, 'output_tokens': result.usage.output_tokens},
-                'stop_reason': result.stop_reason,
-                'transcript_size': len(self.transcript_store.entries),
-            }
+        result = self.submit_message(prompt, matched_commands, matched_tools, denied_tools)
+        yield {'type': 'message_delta', 'text': result.output}
+        yield {
+            'type': 'message_stop',
+            'usage': {'input_tokens': result.usage.input_tokens, 'output_tokens': result.usage.output_tokens},
+            'stop_reason': result.stop_reason,
+            'transcript_size': len(self.transcript_store.entries),
+        }
 
     def compact_messages_if_needed(self) -> None:
         if len(self.mutable_messages) > self.config.compact_after_turns:

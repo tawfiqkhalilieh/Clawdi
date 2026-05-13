@@ -114,14 +114,6 @@ pub(crate) fn parse_frame_with_provider(
     }
 
     if data_lines.is_empty() {
-        // If it doesn't look like SSE (no data: prefix), but provider is Gemini,
-        // it might be a raw JSON stream.
-        if provider == "Gemini" {
-            let payload = trimmed;
-            if payload.starts_with('{') {
-                return map_gemini_event(payload, provider, model);
-            }
-        }
         return Ok(None);
     }
 
@@ -130,64 +122,9 @@ pub(crate) fn parse_frame_with_provider(
         return Ok(None);
     }
 
-    if provider == "Gemini" {
-        return map_gemini_event(&payload, provider, model);
-    }
-
     serde_json::from_str::<StreamEvent>(&payload)
         .map(Some)
         .map_err(|error| ApiError::json_deserialize(provider, model, &payload, error))
-}
-
-fn map_gemini_event(
-    payload: &str,
-    provider: &str,
-    model: &str,
-) -> Result<Option<StreamEvent>, ApiError> {
-    let gemini_chunk = serde_json::from_str::<serde_json::Value>(payload)
-        .map_err(|error| ApiError::json_deserialize(provider, model, payload, error))?;
-
-    if let Some(candidates) = gemini_chunk.get("candidates").and_then(|c| c.as_array()) {
-        if let Some(candidate) = candidates.first() {
-            if let Some(content) = candidate.get("content") {
-                if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
-                    if let Some(part) = parts.first() {
-                        if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                            return Ok(Some(StreamEvent::ContentBlockDelta(
-                                crate::types::ContentBlockDeltaEvent {
-                                    index: 0,
-                                    delta: crate::types::ContentBlockDelta::TextDelta {
-                                        text: text.to_string(),
-                                    },
-                                },
-                            )));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Handle usage metadata at the end of the stream
-    if let Some(usage) = gemini_chunk.get("usageMetadata") {
-        let input_tokens = usage.get("promptTokenCount").and_then(|t| t.as_u64()).unwrap_or(0) as u32;
-        let output_tokens = usage.get("candidatesTokenCount").and_then(|t| t.as_u64()).unwrap_or(0) as u32;
-        if input_tokens > 0 || output_tokens > 0 {
-             return Ok(Some(StreamEvent::MessageDelta(crate::types::MessageDeltaEvent {
-                delta: crate::types::MessageDelta {
-                    stop_reason: Some("end_turn".to_string()),
-                    stop_sequence: None,
-                },
-                usage: crate::types::Usage {
-                    input_tokens,
-                    output_tokens,
-                    ..Default::default()
-                },
-            })));
-        }
-    }
-
-    Ok(None)
 }
 
 #[cfg(test)]

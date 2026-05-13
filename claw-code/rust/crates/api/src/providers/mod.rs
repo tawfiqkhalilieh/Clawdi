@@ -8,7 +8,6 @@ use crate::error::ApiError;
 use crate::types::{MessageRequest, MessageResponse};
 
 pub mod anthropic;
-pub mod gemini;
 pub mod openai_compat;
 
 #[allow(dead_code)]
@@ -34,7 +33,6 @@ pub enum ProviderKind {
     Anthropic,
     Xai,
     OpenAi,
-    Gemini,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,42 +75,6 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
             auth_env: "ANTHROPIC_API_KEY",
             base_url_env: "ANTHROPIC_BASE_URL",
             default_base_url: anthropic::DEFAULT_BASE_URL,
-        },
-    ),
-    (
-        "gemini-pro",
-        ProviderMetadata {
-            provider: ProviderKind::Gemini,
-            auth_env: "GEMINI_API_KEY",
-            base_url_env: "GEMINI_BASE_URL",
-            default_base_url: gemini::DEFAULT_BASE_URL,
-        },
-    ),
-    (
-        "gemini-flash",
-        ProviderMetadata {
-            provider: ProviderKind::Gemini,
-            auth_env: "GEMINI_API_KEY",
-            base_url_env: "GEMINI_BASE_URL",
-            default_base_url: gemini::DEFAULT_BASE_URL,
-        },
-    ),
-    (
-        "gemini-3-pro",
-        ProviderMetadata {
-            provider: ProviderKind::Gemini,
-            auth_env: "GEMINI_API_KEY",
-            base_url_env: "GEMINI_BASE_URL",
-            default_base_url: gemini::DEFAULT_BASE_URL,
-        },
-    ),
-    (
-        "gemini-3-flash",
-        ProviderMetadata {
-            provider: ProviderKind::Gemini,
-            auth_env: "GEMINI_API_KEY",
-            base_url_env: "GEMINI_BASE_URL",
-            default_base_url: gemini::DEFAULT_BASE_URL,
         },
     ),
     (
@@ -185,13 +147,6 @@ pub fn resolve_model_alias(model: &str) -> String {
                     "haiku" => "claude-haiku-4-5-20251213",
                     _ => trimmed,
                 },
-                ProviderKind::Gemini => match *alias {
-                    "gemini-pro" => "gemini-2.5-pro",
-                    "gemini-flash" => "gemini-2.5-flash",
-                    "gemini-3-pro" => "gemini-3-pro-preview",
-                    "gemini-3-flash" => "gemini-3-flash-preview",
-                    _ => trimmed,
-                },
                 ProviderKind::Xai => match *alias {
                     "grok" | "grok-3" => "grok-3",
                     "grok-mini" | "grok-3-mini" => "grok-3-mini",
@@ -216,14 +171,6 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             auth_env: "ANTHROPIC_API_KEY",
             base_url_env: "ANTHROPIC_BASE_URL",
             default_base_url: anthropic::DEFAULT_BASE_URL,
-        });
-    }
-    if canonical.starts_with("gemini") {
-        return Some(ProviderMetadata {
-            provider: ProviderKind::Gemini,
-            auth_env: "GEMINI_API_KEY",
-            base_url_env: "GEMINI_BASE_URL",
-            default_base_url: gemini::DEFAULT_BASE_URL,
         });
     }
     if canonical.starts_with("grok") {
@@ -307,12 +254,9 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
 pub const fn model_family_identity_for_kind(kind: ProviderKind) -> runtime::ModelFamilyIdentity {
     match kind {
         ProviderKind::Anthropic => runtime::ModelFamilyIdentity::Claude,
-        ProviderKind::Xai | ProviderKind::OpenAi | ProviderKind::Gemini => {
-            runtime::ModelFamilyIdentity::Generic
-        }
+        ProviderKind::Xai | ProviderKind::OpenAi => runtime::ModelFamilyIdentity::Generic,
     }
 }
-
 
 #[must_use]
 pub fn model_family_identity_for(model: &str) -> runtime::ModelFamilyIdentity {

@@ -266,10 +266,6 @@ pub fn credentials_path() -> io::Result<PathBuf> {
     Ok(credentials_home_dir()?.join("credentials.json"))
 }
 
-pub fn gemini_credentials_path() -> io::Result<PathBuf> {
-    Ok(gemini_home_dir()?.join("oauth_creds.json"))
-}
-
 pub fn load_oauth_credentials() -> io::Result<Option<OAuthTokenSet>> {
     let path = credentials_path()?;
     let root = read_credentials_root(&path)?;
@@ -280,17 +276,6 @@ pub fn load_oauth_credentials() -> io::Result<Option<OAuthTokenSet>> {
         return Ok(None);
     }
     let stored = serde_json::from_value::<StoredOAuthCredentials>(oauth.clone())
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    Ok(Some(stored.into()))
-}
-
-pub fn load_gemini_oauth_credentials() -> io::Result<Option<OAuthTokenSet>> {
-    let path = gemini_credentials_path()?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    let contents = fs::read_to_string(&path)?;
-    let stored = serde_json::from_str::<GeminiOAuthCredentials>(&contents)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     Ok(Some(stored.into()))
 }
@@ -339,41 +324,10 @@ pub fn parse_oauth_callback_query(query: &str) -> Result<OAuthCallbackParams, St
     })
 }
 
-#[cfg(not(windows))]
 fn generate_random_token(bytes: usize) -> io::Result<String> {
     let mut buffer = vec![0_u8; bytes];
     File::open("/dev/urandom")?.read_exact(&mut buffer)?;
     Ok(base64url_encode(&buffer))
-}
-
-#[cfg(windows)]
-fn generate_random_token(bytes: usize) -> io::Result<String> {
-    let mut buffer = vec![0_u8; bytes];
-    getrandom::getrandom(&mut buffer)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-    Ok(base64url_encode(&buffer))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct GeminiOAuthCredentials {
-    access_token: String,
-    refresh_token: Option<String>,
-    expiry_date: Option<u64>,
-    scope: Option<String>,
-}
-
-impl From<GeminiOAuthCredentials> for OAuthTokenSet {
-    fn from(value: GeminiOAuthCredentials) -> Self {
-        Self {
-            access_token: value.access_token,
-            refresh_token: value.refresh_token,
-            expires_at: value.expiry_date,
-            scopes: value
-                .scope
-                .map(|s| s.split(' ').map(String::from).collect())
-                .unwrap_or_default(),
-        }
-    }
 }
 
 fn credentials_home_dir() -> io::Result<PathBuf> {
@@ -390,18 +344,6 @@ fn credentials_home_dir() -> io::Result<PathBuf> {
             )
         })?;
     Ok(PathBuf::from(home).join(".claw"))
-}
-
-fn gemini_home_dir() -> io::Result<PathBuf> {
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "HOME is not set (on Windows, set USERPROFILE or HOME)",
-            )
-        })?;
-  Ok(PathBuf::from(home).join(".gemini"))
 }
 
 fn read_credentials_root(path: &PathBuf) -> io::Result<Map<String, Value>> {

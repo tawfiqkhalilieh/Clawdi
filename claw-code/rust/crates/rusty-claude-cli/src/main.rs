@@ -4472,14 +4472,14 @@ impl LiveCli {
             |_| self.session.path.display().to_string(),
             |path| path.display().to_string(),
         );
-        format!(
-            "\x1b[38;5;196m\
- ██████╗██╗      █████╗ ██╗    ██╗\n\
-██╔════╝██║     ██╔══██╗██║    ██║\n\
-██║     ██║     ███████║██║ █╗ ██║\n\
-██║     ██║     ██╔══██║██║███╗██║\n\
-╚██████╗███████╗██║  ██║╚███╔███╔╝\n\
- ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝\x1b[0m \x1b[38;5;208mCode\x1b[0m 🦞\n\n\
+
+        format!("\x1b[38;5;69m\
+ ██████╗██╗      █████╗ ██╗    ██╗██████╗ ██╗\n\
+\x1b[38;5;68m██╔════╝██║     ██╔══██╗██║    ██║██╔══██╗██║\n\
+\x1b[38;5;63m██║     ██║     ███████║██║ █╗ ██║██║  ██║██║\n\
+\x1b[38;5;99m██║     ██║     ██╔══██║██║███╗██║██║  ██║██║\n\
+\x1b[38;5;135m╚██████╗███████╗██║  ██║╚███╔███╔╝██████╔╝██║\n\
+\x1b[38;5;141m ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝╚═════╝ ╚═╝\x1b[0m \x1b[38;5;63m✦\x1b[0m\n\n\
   \x1b[2mModel\x1b[0m            {}\n\
   \x1b[2mPermissions\x1b[0m      {}\n\
   \x1b[2mBranch\x1b[0m           {}\n\
@@ -7768,6 +7768,11 @@ fn build_runtime_with_plugin_state(
     );
     if emit_output {
         runtime = runtime.with_hook_progress_reporter(Box::new(CliHookProgressReporter));
+        runtime = runtime.with_tool_output_callback(Box::new(|chunk| {
+            use std::io::Write;
+            print!("{chunk}");
+            let _ = std::io::stdout().flush();
+        }));
     }
     Ok(BuiltRuntime::new(runtime, plugin_registry, mcp_state))
 }
@@ -9173,7 +9178,12 @@ impl CliToolExecutor {
 }
 
 impl ToolExecutor for CliToolExecutor {
-    fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, ToolError> {
+    fn execute(
+        &mut self,
+        tool_name: &str,
+        input: &str,
+        on_chunk: &mut dyn FnMut(String),
+    ) -> Result<String, ToolError> {
         if self
             .allowed_tools
             .as_ref()
@@ -9191,7 +9201,7 @@ impl ToolExecutor for CliToolExecutor {
             self.execute_runtime_tool(tool_name, value)
         } else {
             self.tool_registry
-                .execute(tool_name, &value)
+                .execute(tool_name, &value, on_chunk)
                 .map_err(ToolError::new)
         };
         match result {
@@ -13455,7 +13465,7 @@ UU conflicted.rs",
         );
 
         let tool_output = executor
-            .execute("mcp__alpha__echo", r#"{"text":"hello"}"#)
+            .execute("mcp__alpha__echo", r#"{"text":"hello"}"#, &mut |_| {})
             .expect("discovered mcp tool should execute");
         let tool_json: serde_json::Value =
             serde_json::from_str(&tool_output).expect("tool output should be json");
@@ -13465,6 +13475,7 @@ UU conflicted.rs",
             .execute(
                 "MCPTool",
                 r#"{"qualifiedName":"mcp__alpha__echo","arguments":{"text":"wrapped"}}"#,
+                &mut |_| {},
             )
             .expect("generic mcp wrapper should execute");
         let wrapped_json: serde_json::Value =
@@ -13472,7 +13483,11 @@ UU conflicted.rs",
         assert_eq!(wrapped_json["structuredContent"]["echoed"], "wrapped");
 
         let search_output = executor
-            .execute("ToolSearch", r#"{"query":"alpha echo","max_results":5}"#)
+            .execute(
+                "ToolSearch",
+                r#"{"query":"alpha echo","max_results":5}"#,
+                &mut |_| {},
+            )
             .expect("tool search should execute");
         let search_json: serde_json::Value =
             serde_json::from_str(&search_output).expect("search output should be json");
@@ -13492,7 +13507,7 @@ UU conflicted.rs",
         );
 
         let listed = executor
-            .execute("ListMcpResourcesTool", r#"{"server":"alpha"}"#)
+            .execute("ListMcpResourcesTool", r#"{"server":"alpha"}"#, &mut |_| {})
             .expect("resources should list");
         let listed_json: serde_json::Value =
             serde_json::from_str(&listed).expect("resource output should be json");
@@ -13502,6 +13517,7 @@ UU conflicted.rs",
             .execute(
                 "ReadMcpResourceTool",
                 r#"{"server":"alpha","uri":"file://guide.txt"}"#,
+                &mut |_| {},
             )
             .expect("resource should read");
         let read_json: serde_json::Value =
@@ -13553,7 +13569,11 @@ UU conflicted.rs",
         );
 
         let search_output = executor
-            .execute("ToolSearch", r#"{"query":"remote","max_results":5}"#)
+            .execute(
+                "ToolSearch",
+                r#"{"query":"remote","max_results":5}"#,
+                &mut |_| {},
+            )
             .expect("tool search should execute");
         let search_json: serde_json::Value =
             serde_json::from_str(&search_output).expect("search output should be json");

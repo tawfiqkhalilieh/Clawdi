@@ -401,7 +401,7 @@ fn gemini_home_dir() -> io::Result<PathBuf> {
                 "HOME is not set (on Windows, set USERPROFILE or HOME)",
             )
         })?;
-    Ok(PathBuf::from(home).join(".gemini"))
+  Ok(PathBuf::from(home).join(".gemini"))
 }
 
 fn read_credentials_root(path: &PathBuf) -> io::Result<Map<String, Value>> {

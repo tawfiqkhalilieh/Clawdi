@@ -1,3 +1,6 @@
 [submodule "gemini-cli"]
 	path = gemini-cli
 	url = git@github.com:google-gemini/gemini-cli.git
+[submodule "claw-code"]
+	path = claw-code
+	url = git@github.com:ultraworkers/claw-code.git

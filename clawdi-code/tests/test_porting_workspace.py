@@ -244,5 +244,54 @@ class PortingWorkspaceTests(unittest.TestCase):
         self.assertIn('mode=deep-link', deep_link_result.stdout)
 
 
+    def test_query_engine_stream_submit_runs(self) -> None:
+        from src.query_engine import QueryEnginePort
+        engine = QueryEnginePort.from_workspace()
+        events = list(engine.stream_submit_message('hello', matched_commands=('review',)))
+        
+        event_types = [e['type'] for e in events]
+        self.assertIn('message_start', event_types)
+        self.assertIn('command_match', event_types)
+        self.assertIn('message_delta', event_types)
+        self.assertIn('message_stop', event_types)
+        
+        # Verify specific event content
+        start_event = next(e for e in events if e['type'] == 'message_start')
+        self.assertEqual(start_event['prompt'], 'hello')
+        
+        match_event = next(e for e in events if e['type'] == 'command_match')
+        self.assertIn('review', match_event['commands'])
+
+    def test_subsystems_cli_limit_runs(self) -> None:
+        result = subprocess.run(
+            [sys.executable, '-m', 'src.main', 'subsystems', '--limit', '5'],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        lines = result.stdout.strip().split('\n')
+        self.assertLessEqual(len(lines), 5)
+
+    def test_turn_loop_live_gemini_flag_parsing(self) -> None:
+        # We don't need a real API key to test that the flag is accepted and reaches the engine
+        # But it will likely fail with an error message in the output
+        result = subprocess.run(
+            [sys.executable, '-m', 'src.main', 'turn-loop', 'hello', '--max-turns', '1', '--live-gemini', '--gemini-model', 'test-model'],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn('## Turn 1', result.stdout)
+        # It should either succeed (unlikely without key) or report an Error calling Gemini
+        self.assertTrue('Error calling Gemini' in result.stdout or 'Matched commands' in result.stdout)
+
+    def test_query_engine_config_overrides(self) -> None:
+        from src.query_engine import QueryEngineConfig, QueryEnginePort
+        config = QueryEngineConfig(max_turns=5, gemini_model='custom-model')
+        engine = QueryEnginePort.from_workspace()
+        engine.config = config
+        self.assertEqual(engine.config.max_turns, 5)
+        self.assertEqual(engine.config.gemini_model, 'custom-model')
+
 if __name__ == '__main__':
     unittest.main()

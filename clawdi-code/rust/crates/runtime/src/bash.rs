@@ -453,6 +453,32 @@ mod tests {
 
         assert!(!output.sandbox_status.expect("sandbox status").enabled);
     }
+
+    #[test]
+    fn execute_bash_with_streaming_calls_callback() {
+        let mut chunks = Vec::new();
+        let output = super::execute_bash_with_streaming(
+            BashCommandInput {
+                command: String::from("printf 'hello world'"),
+                timeout: Some(1_000),
+                description: None,
+                run_in_background: Some(false),
+                dangerously_disable_sandbox: Some(true),
+                namespace_restrictions: None,
+                isolate_network: None,
+                filesystem_mode: None,
+                allowed_mounts: None,
+            },
+            &mut |chunk| {
+                chunks.push(chunk);
+            },
+        )
+        .expect("bash command should execute");
+
+        assert_eq!(output.stdout, "hello world");
+        assert!(!chunks.is_empty());
+        assert_eq!(chunks.concat(), "hello world");
+    }
 }
 
 /// Maximum output bytes before truncation (16 KiB, matching upstream).

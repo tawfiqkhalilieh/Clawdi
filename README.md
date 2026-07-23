@@ -1,3 +1,7 @@
+### This repo is archived after the depreciation of of Gemini-CLI.
+__
+
+
 # Claudi CLI Workspace
 
 Welcome to the **Claudi CLI** workspace. This monorepo is a strategic integration project that bridges the gap between **Gemini's seamless ecosystem** and **high-performance Rust-based agent harnesses**.
